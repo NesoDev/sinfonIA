@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SinfonIA - Reconocimiento de Gestos</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='main.css') }}">
+</head>
+
+<body>
+    <div class="container">
+        <canvas id="waves"></canvas>
+        <div class="content">
+            <div class="camera">
+                <div class="state" id="state-indicator">
+                    <img src="{{ url_for('static', filename='live-1.png') }}" alt="Estado inactivo" id="state-img-1">
+                    <img src="{{ url_for('static', filename='live-2.png') }}" alt="Estado activo" id="state-img-2" style="display: none;">
+                </div>
+                <div class="shadow" id="shadow-left"></div>
+                <div class="shadow" id="shadow-rigth"></div>
+                <div class="shadow" id="shadow-top"></div>
+                <div class="shadow" id="shadow-bottom"></div>
+                <img class="frame" id="video-frame" src="https://res.cloudinary.com/dozfohnhs/image/upload/v1734113052/1iewg3rme8d61.png_tjbtkz.webp">
+            </div>
+            <div class="board">
+                <canvas id="hands"></canvas>
+            </div>
+            <div class="result">
+                <span id="gesture-result">Esperando...</span>
+            </div>
+            <div class="controls">
+                <button id="start-camera" class="btn-camera">Iniciar Cámara</button>
+                <button id="stop-camera" class="btn-camera" style="display: none;">Detener Cámara</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let cameraActive = false;
+        let gestureInterval;
+
+        document.getElementById('start-camera').addEventListener('click', async function() {
+            try {
+                const response = await fetch('/start_camera');
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    cameraActive = true;
+                    
+                    // Cambiar estado visual
+                    document.getElementById('state-img-1').style.display = 'none';
+                    document.getElementById('state-img-2').style.display = 'block';
+                    document.getElementById('start-camera').style.display = 'none';
+                    document.getElementById('stop-camera').style.display = 'block';
+                    
+                    // Cambiar src de la imagen para mostrar el video feed
+                    document.getElementById('video-frame').src = '/video_feed';
+                    
+                    // Iniciar polling de gestos
+                    gestureInterval = setInterval(updateGesture, 500);
+                }
+            } catch (error) {
+                console.error('Error al iniciar cámara:', error);
+            }
+        });
+
+        document.getElementById('stop-camera').addEventListener('click', async function() {
+            try {
+                const response = await fetch('/stop_camera');
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    cameraActive = false;
+                    
+                    // Cambiar estado visual
+                    document.getElementById('state-img-1').style.display = 'block';
+                    document.getElementById('state-img-2').style.display = 'none';
+                    document.getElementById('start-camera').style.display = 'block';
+                    document.getElementById('stop-camera').style.display = 'none';
+                    
+                    // Volver a imagen por defecto
+                    document.getElementById('video-frame').src = 'https://res.cloudinary.com/dozfohnhs/image/upload/v1734113052/1iewg3rme8d61.png_tjbtkz.webp';
+                    document.getElementById('gesture-result').textContent = 'Esperando...';
+                    
+                    // Detener polling
+                    if (gestureInterval) {
+                        clearInterval(gestureInterval);
+                    }
+                }
+            } catch (error) {
+                console.error('Error al detener cámara:', error);
+            }
+        });
+
+        async function updateGesture() {
+            if (!cameraActive) return;
+            
+            try {
+                const response = await fetch('/gesture_data');
+                const data = await response.json();
+                
+                if (data.gesture && data.confidence > 0) {
+                    document.getElementById('gesture-result').textContent = 
+                        `${data.gesture} (${(data.confidence * 100).toFixed(1)}%)`;
+                }
+            } catch (error) {
+                console.error('Error al obtener datos de gesto:', error);
+            }
+        }
+    </script>
+</body>
+
+</html>
