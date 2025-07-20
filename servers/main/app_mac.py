@@ -3,9 +3,10 @@ import numpy as np
 import os
 from collections import deque
 import mediapipe as mp
+import requests
 from flask import Flask, render_template, Response, jsonify
 
-# Importar modelo con manejo de errores
+# === Manejo de TensorFlow/Keras ===
 try:
     import tensorflow as tf
     from tensorflow.keras.models import load_model
@@ -100,15 +101,16 @@ hands = mp_hands.Hands(static_image_mode=False, max_num_hands=2,
 # === Variables globales ===
 cap = None
 camera_active = False
-current_gesture = "..."
+current_gesture = "Sin detectar"
 current_confidence = 0.0
 hand_positions = []  # Lista de posiciones de centros de manos: [{"x": 0.5, "y": 0.5, "hand": "left/right"}]
 
 def init_camera():
     global cap
     if cap is None:
+        # Mac compatibility - usar cv2.VideoCapture sin CAP_DSHOW
         cap = cv2.VideoCapture(0)
-    return cap is not None
+    return cap is not None and cap.isOpened()
 
 def generate_frames():
     global camera_active, current_gesture, current_confidence, hand_positions
@@ -186,6 +188,20 @@ def generate_frames():
             # Debug: Imprimir para verificar actualización
             print(f"🎯 Gesto detectado: {pred_label} ({confidence:.2f})")
 
+            # Enviar al servidor (primer endpoint)
+            try:
+                response1 = requests.post("http://localhost:5022/generate", json={"prompt": pred_label}, timeout=2)
+                print(f"✅ Enviado a 5022/generate: {response1.status_code} - {response1.text}")
+            except Exception as e:
+                print(f"❌ Error al conectar con 5022/generate: {e}")
+
+            # Enviar al servidor (segundo endpoint)
+            try:
+                response2 = requests.post("http://localhost:5009/generate", json={"prompt": pred_label}, timeout=2)
+                print(f"✅ Enviado a 5009/generate: {response2.status_code} - {response2.text}")
+            except Exception as e:
+                print(f"❌ Error al conectar con 5009/generate: {e}")
+
             # Mostrar texto en la imagen
             text = f"{pred_label} ({confidence:.2f})"
             cv2.putText(frame, text, (10, 40), cv2.FONT_HERSHEY_SIMPLEX,
@@ -220,8 +236,11 @@ def start_camera():
 
 @app.route('/stop_camera')
 def stop_camera():
-    global camera_active
+    global camera_active, cap
     camera_active = False
+    if cap is not None:
+        cap.release()
+        cap = None
     return jsonify({"status": "success", "message": "Cámara detenida"})
 
 @app.route('/gesture_data')
@@ -239,7 +258,148 @@ def get_hand_positions():
         "hands": hand_positions
     })
 
+# Crear route dinámico para CSS (necesario para bg.svg)
+@app.route('/css/index.css')
+def dynamic_css():
+    from flask import url_for
+    css_content = f"""
+    * {{
+        margin: 0;
+        padding: 0;
+    }}
+
+    @font-face {{
+        font-family: 'SF Pro Display';
+        src: url('{url_for('static', filename='SF-Pro-Display-Regular.otf')}') format('opentype');
+        font-weight: 400;
+    }}
+
+    @font-face {{
+        font-family: 'SF Pro Display';
+        src: url('{url_for('static', filename='SF-Pro-Display-Bold.otf')}') format('opentype');
+        font-weight: 700;
+    }}
+
+    @font-face {{
+        font-family: 'SF Pro Display';
+        src: url('{url_for('static', filename='SF-Pro-Display-Semibold.otf')}') format('opentype');
+        font-weight: 600;
+    }}
+
+    body {{
+        width: 100%;
+        height: 100dvh;
+        background: url('{url_for('static', filename='bg.svg')}') no-repeat center center;
+        background-size: cover;
+        overflow: hidden;
+    }}
+
+    .container {{
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+    }}
+
+    .shadow {{
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(135deg, rgba(0, 0, 0, 0.4), transparent 50%, rgba(0, 0, 0, 0.4));
+    }}
+
+    .content {{
+        position: relative;
+        z-index: 2;
+        width: 90%;
+        height: 90%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: space-between;
+        padding: 40px;
+    }}
+
+    .text-box {{
+        text-align: center;
+        color: white;
+        font-family: 'SF Pro Display', sans-serif;
+    }}
+
+    #text-top {{
+        font-size: 4rem;
+        font-weight: 700;
+        line-height: 1.1;
+        margin-bottom: 20px;
+    }}
+
+    #text-top span:first-child {{
+        font-weight: 400;
+        font-size: 3rem;
+    }}
+
+    #text-top span:last-child {{
+        display: block;
+        background: linear-gradient(45deg, #ff6b6b, #4ecdc4, #45b7d1, #96ceb4, #feca57);
+        background-size: 300% 300%;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        animation: gradient 3s ease infinite;
+    }}
+
+    @keyframes gradient {{
+        0% {{ background-position: 0% 50%; }}
+        50% {{ background-position: 100% 50%; }}
+        100% {{ background-position: 0% 50%; }}
+    }}
+
+    #text-bottom {{
+        font-size: 1.5rem;
+        font-weight: 400;
+        margin-top: 20px;
+    }}
+
+    #text-bottom button {{
+        margin-top: 30px;
+        padding: 15px 40px;
+        font-size: 1.2rem;
+        font-weight: 600;
+        font-family: 'SF Pro Display', sans-serif;
+        background: rgba(255, 255, 255, 0.1);
+        color: white;
+        border: 2px solid rgba(255, 255, 255, 0.3);
+        border-radius: 50px;
+        cursor: pointer;
+        backdrop-filter: blur(10px);
+        transition: all 0.3s ease;
+    }}
+
+    #text-bottom button:hover {{
+        background: rgba(255, 255, 255, 0.2);
+        border-color: rgba(255, 255, 255, 0.5);
+        transform: translateY(-2px);
+    }}
+
+    #airpods {{
+        position: absolute;
+        right: 10%;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 300px;
+        height: auto;
+        opacity: 0.8;
+    }}
+    """
+    return css_content, 200, {'Content-Type': 'text/css'}
+
 if __name__ == '__main__':
-    print("🚀 Iniciando servidor Flask...")
+    print("🚀 Iniciando servidor Flask para Mac...")
     print("📱 Abre http://localhost:8002 en tu navegador")
+    print("🔗 Enviará gestos a:")
+    print("   - http://localhost:5022/generate")
+    print("   - http://localhost:5009/generate")
     app.run(debug=True, host='0.0.0.0', port=8002)
