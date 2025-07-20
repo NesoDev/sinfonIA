@@ -3,9 +3,10 @@ import numpy as np
 import os
 from collections import deque
 import mediapipe as mp
+import requests
 from flask import Flask, render_template, Response, jsonify
 
-# Importar modelo con manejo de errores
+# === Manejo de TensorFlow/Keras ===
 try:
     import tensorflow as tf
     from tensorflow.keras.models import load_model
@@ -30,7 +31,6 @@ LABELS_PATH = os.path.join(BASE_DIR, "label_encoder_classes.npy")
 model = None
 label_classes = []
 
-# Intentar cargar el modelo si existe
 if TF_AVAILABLE:
     try:
         if os.path.exists(LABELS_PATH):
@@ -63,7 +63,6 @@ if TF_AVAILABLE:
             
     except Exception as e:
         print(f"❌ Error general cargando modelo: {e}")
-        print("⚠️ Modo demo activado")
         model = None
         try:
             label_classes = np.load(LABELS_PATH, allow_pickle=True)
@@ -99,16 +98,16 @@ current_confidence = 0.0
 def init_camera():
     global cap
     if cap is None:
-        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)  # For Windows compatibility
+        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)  # Windows compatibility
     return cap is not None and cap.isOpened()
 
 def generate_frames():
     global camera_active, current_gesture, current_confidence
-    
+
     while camera_active:
         if cap is None or not cap.isOpened():
             break
-            
+
         ret, frame = cap.read()
         if not ret:
             break
@@ -145,6 +144,14 @@ def generate_frames():
             current_gesture = pred_label
             current_confidence = confidence
 
+            # Enviar al servidor
+            try:
+                response = requests.post("http://localhost:5009/generate", json={"prompt": pred_label})
+                print(f"✅ Enviado a /generate: {response.status_code} - {response.text}")
+            except Exception as e:
+                print(f"❌ Error al conectar con /generate: {e}")
+
+            # Mostrar texto sobre el frame
             text = f"{pred_label} ({confidence:.2f})"
             cv2.putText(frame, text, (10, 40), cv2.FONT_HERSHEY_SIMPLEX,
                         1.2, (0, 255, 0), 3)
