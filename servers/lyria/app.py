@@ -1,123 +1,123 @@
 import asyncio
 import wave
 import time
+import threading
 from pathlib import Path
+from flask import Flask, request, jsonify
 
 from google import genai
 from google.genai import types
-import aioconsole  # pip install aioconsole
-import sounddevice as sd  # pip install sounddevice
 import numpy as np
+import sounddevice as sd
 
-# Output directory
-OUTPUT_DIR = Path("generated_audio")
-OUTPUT_DIR.mkdir(exist_ok=True)
+# Flask app
+app = Flask(__name__)
 
-# Set your API key here
+# Google client
 client = genai.Client(
     api_key="AIzaSyAcVa7ksnOPd28Jj-4r8P16ckh_PqYVGBw",
     http_options={'api_version': 'v1alpha'}
 )
 
-# Audio parameters
+# Audio settings
 SAMPLE_RATE = 44100
 CHANNELS = 1
 SAMPLE_WIDTH = 2  # 16-bit audio
 
-# Buffer to store audio chunks for saving
+# Output directory
+OUTPUT_DIR = Path("generated_audio")
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+# Shared buffer and lock
 audio_buffer = bytearray()
+buffer_lock = threading.Lock()
+
+def save_audio_file(prompt: str):
+    """Save the buffer to a WAV file."""
+    with buffer_lock:
+        if not audio_buffer:
+            return None
+        filename = OUTPUT_DIR / f"{int(time.time())}_{prompt.replace(' ', '_')}.wav"
+        with wave.open(str(filename), 'wb') as wf:
+            wf.setnchannels(CHANNELS)
+            wf.setsampwidth(SAMPLE_WIDTH)
+            wf.setframerate(SAMPLE_RATE)
+            wf.writeframes(audio_buffer)
+        audio_buffer.clear()
+        return str(filename)
 
 async def receive_audio(session):
-    """Process and play incoming audio while saving it."""
+    """Handle incoming audio chunks and playback."""
     global audio_buffer
-    print("🎧 Ready to receive audio...")
     try:
         async for message in session.receive():
             chunk = message.server_content.audio_chunks[0].data
-            audio_buffer.extend(chunk)
-
-            # Convert bytes to numpy int16 array for playback
+            with buffer_lock:
+                audio_buffer.extend(chunk)
             audio_np = np.frombuffer(chunk, dtype=np.int16)
             try:
-                if not hasattr(receive_audio, "stream"):
-                    receive_audio.stream = sd.OutputStream(
-                        samplerate=SAMPLE_RATE,
-                        channels=1,
-                        dtype='int16',
-                        blocksize=0 
-                    )
-                    receive_audio.stream.start()
-
-                receive_audio.stream.write(audio_np)
+                sd.play(audio_np, samplerate=SAMPLE_RATE)
+                sd.wait()
             except Exception as e:
-                print(f"Audio playback error: {e}")
-
-            await asyncio.sleep(0)
+                print(f"Playback error: {e}")
     except Exception as e:
-        print(f"⚠️ receive_audio stopped: {e}")
-        raise  # Let the caller know to reconnect
+        print(f"Audio receive error: {e}")
 
-def save_audio_file(prompt: str):
-    """Save buffered audio to a .wav file."""
-    global audio_buffer
-    if not audio_buffer:
-        print("⚠️ No audio data to save.")
-        return
-    filename = OUTPUT_DIR / f"{int(time.time())}_{prompt.replace(' ', '_')}.wav"
-    with wave.open(str(filename), 'wb') as wf:
-        wf.setnchannels(CHANNELS)
-        wf.setsampwidth(SAMPLE_WIDTH)
-        wf.setframerate(SAMPLE_RATE)
-        wf.writeframes(audio_buffer)
-    print(f"💾 Audio saved to: {filename}")
-    audio_buffer = bytearray()  # Reset buffer
-
-async def prompt_listener(session):
-    """Listen for user prompts to change music style in real-time."""
-    current_prompt = "solo violin playing classical melody"
-    while True:
-        user_input = await aioconsole.ainput("\nEnter a new prompt (or 'q' to quit): ")
-        if user_input.strip().lower() == 'q':
-            save_audio_file(current_prompt)
-            print("🛑 Exiting.")
-            break
-        if user_input.strip():
-            save_audio_file(current_prompt)
-            current_prompt = user_input.strip()
-            print(f"🎵 Changing music style to: {current_prompt}")
+async def generate_music(prompt: str):
+    """Core generation logic for a single prompt."""
+    try:
+        async with (
+            client.aio.live.music.connect(model='models/lyria-realtime-exp') as session,
+            asyncio.TaskGroup() as tg,
+        ):
             await session.set_weighted_prompts(
-                prompts=[types.WeightedPrompt(text=f"classical music, {current_prompt}", weight=1.0)]
+                prompts=[types.WeightedPrompt(text=f"classical music, {prompt}", weight=1.0)]
+            )
+            await session.set_music_generation_config(
+                config=types.LiveMusicGenerationConfig(bpm=90, temperature=1.0)
             )
             await session.play()
 
-async def run_session(initial_prompt="solo violin playing classical melody"):
-    """Single session block that handles playback and prompt input."""
-    print(f"🎼 Starting session with initial prompt: {initial_prompt}")
-    async with (
-        client.aio.live.music.connect(model='models/lyria-realtime-exp') as session,
-        asyncio.TaskGroup() as tg,
-    ):
+            tg.create_task(receive_audio(session))
 
-        await session.set_weighted_prompts(
-            prompts=[types.WeightedPrompt(text=initial_prompt, weight=1.0)]
-        )
-        await session.set_music_generation_config(
-            config=types.LiveMusicGenerationConfig(bpm=120, temperature=1.0)
-        )
-        await session.play()
+            # Run for 5 seconds only
+            await asyncio.sleep(5)
+            await session.stop()
 
-        tg.create_task(receive_audio(session))
-        tg.create_task(prompt_listener(session))
+    except Exception as e:
+        print(f"Generation error: {e}")
 
-async def main():
-    initial_prompt = "violin alegre"
-    while True:
-        try:
-            await run_session(initial_prompt)
-            break  # Exit loop if run_session completes normally (e.g., user quits)
-        except Exception as e:
-            print(f"💥 Session crashed, restarting with prompt '{initial_prompt}'... Error: {type(e).__name__} - {e}")
-            await asyncio.sleep(2)
+def run_async_generation(prompt: str):
+    """Launch the async process from Flask in a thread."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(generate_music(prompt))
+    loop.close()
+
+@app.route("/generate", methods=["POST"])
+def generate():
+    data = request.get_json()
+    prompt = data.get("prompt", "").strip()
+
+    if not prompt:
+        return jsonify({"error": "Missing prompt"}), 400
+
+    # Clear previous audio
+    global audio_buffer
+    with buffer_lock:
+        audio_buffer.clear()
+
+    # Run generation in separate thread
+    thread = threading.Thread(target=run_async_generation, args=(prompt,))
+    thread.start()
+    thread.join()
+
+    file_path = save_audio_file(prompt)
+    if not file_path:
+        return jsonify({"error": "No audio generated"}), 500
+
+    return jsonify({"message": "Audio generated", "file_path": file_path})
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    app.run(debug=True, port=5022)
+

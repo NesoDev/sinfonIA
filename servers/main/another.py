@@ -145,11 +145,19 @@ def generate_frames():
             current_confidence = confidence
 
             # Enviar al servidor
+            # Enviar al servidor (primer endpoint)
             try:
-                response = requests.post("http://localhost:5009/generate", json={"prompt": pred_label})
-                print(f"✅ Enviado a /generate: {response.status_code} - {response.text}")
+                response1 = requests.post("http://localhost:5022/generate", json={"prompt": pred_label})
+                print(f"✅ Enviado a 5022/generate: {response1.status_code} - {response1.text}")
             except Exception as e:
-                print(f"❌ Error al conectar con /generate: {e}")
+                print(f"❌ Error al conectar con 5022/generate: {e}")
+
+            # Enviar al servidor (segundo endpoint)
+            try:
+                response2 = requests.post("http://localhost:5009/generate", json={"prompt": pred_label})
+                print(f"✅ Enviado a 5009/generate: {response2.status_code} - {response2.text}")
+            except Exception as e:
+                print(f"❌ Error al conectar con 5009/generate: {e}")
 
             # Mostrar texto sobre el frame
             text = f"{pred_label} ({confidence:.2f})"
